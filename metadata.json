@@ -1,0 +1,6 @@
+{
+  "name": "DocuMatch & Rename Automator",
+  "description": "Free client-side bulk document image matcher, OCR extractor, collision-safe smart renamer, and Excel verification suite for up to 500 documents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
