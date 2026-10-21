@@ -1,61 +1,622 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DocuMatch & Rename Automator - Bulk Image Matching, OCR & Excel Renamer</title>
-    <meta name="description" content="Free client-side bulk document image matcher, OCR extractor, collision-safe smart renamer, and Excel verification suite for up to 500 documents." />
-    <meta property="og:title" content="DocuMatch & Rename Automator - Bulk Image Matching, OCR & Excel Renamer" />
-    <meta property="og:description" content="Free client-side bulk document image matcher, OCR extractor, collision-safe smart renamer, and Excel verification suite for up to 500 documents." />
-    <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <script>
-      // Prevent unhandled errors from browser extensions (e.g. ad blockers / request interceptors)
-      window.addEventListener(
-        'error',
-        function (event) {
-          if (
-            (event.filename && event.filename.includes('chrome-extension://')) ||
-            (event.message &&
-              (event.message.includes('Cannot set property fetch') ||
-                event.message.includes('fetch of #<Window>')))
-          ) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            return true;
-          }
-        },
-        true
-      );
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Precision Marksheet Matcher & Review Workbench</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 md:p-6 font-sans">
+  <div class="max-w-7xl mx-auto space-y-5">
 
-      // Ensure window.fetch has both getter and setter so third-party extensions can safely wrap it
-      try {
-        if (typeof window !== 'undefined' && window.fetch) {
-          const originalFetch = window.fetch.bind(window);
-          let currentFetch = originalFetch;
-          try {
-            Object.defineProperty(window, 'fetch', {
-              get: function () {
-                return currentFetch;
-              },
-              set: function (val) {
-                currentFetch = val;
-              },
-              configurable: true,
-              enumerable: true,
+    <!-- Header -->
+    <header class="border-b border-slate-800 pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <h1 class="text-xl md:text-2xl font-black text-white flex items-center gap-2">
+          <span>Marksheet Matcher & Bulk Renamer</span>
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">v10.0 Review & Inspect Ready</span>
+        </h1>
+        <p class="text-xs text-slate-400 mt-0.5">High-speed OCR, Unicode-sanitized matching, and manual verification inspector.</p>
+      </div>
+      <button onclick="location.reload()" class="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 px-3 py-1.5 rounded-lg transition font-medium">
+        ⟳ Reset All
+      </button>
+    </header>
+
+    <!-- Upload Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-xl p-4 space-y-2">
+        <label class="block text-xs font-bold uppercase tracking-wider text-emerald-400">Step 1: Upload Excel (Book1.xlsx or Candidate List)</label>
+        <input type="file" id="excelInput" accept=".xlsx, .xls, .csv" class="block w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer" />
+        <div id="excelInfo" class="text-[11px] text-slate-400 truncate">Select candidate Excel (.xlsx)</div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-slate-800/80 rounded-xl p-4 space-y-2">
+        <label class="block text-xs font-bold uppercase tracking-wider text-blue-400">Step 2: Select Marksheets (Hari 11 001 - 010, etc.)</label>
+        <input type="file" id="imageInput" multiple accept="image/*" class="block w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer" />
+        <div id="imageInfo" class="text-[11px] text-slate-400 truncate">Select marksheet image files</div>
+      </div>
+    </div>
+
+    <!-- Execution Bar -->
+    <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3 w-full md:w-auto">
+        <button id="startBtn" disabled class="w-full md:w-auto bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs px-6 py-2.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed">
+          ▶ Start Fast Matching & Renaming
+        </button>
+        <span id="liveStatus" class="text-xs font-mono text-slate-400 truncate max-w-md hidden">Ready</span>
+      </div>
+      <div id="statCounter" class="text-xs font-mono text-slate-400">0 / 0 images matched</div>
+    </div>
+
+    <!-- Progress Indicator -->
+    <div id="progressArea" class="hidden space-y-1">
+      <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+        <div id="progressBar" class="bg-blue-500 h-2 transition-all duration-150" style="width: 0%"></div>
+      </div>
+      <div class="flex justify-between text-[11px] font-mono text-slate-400">
+        <span id="progressFile">Processing...</span>
+        <span id="progressPercent">0%</span>
+      </div>
+    </div>
+
+    <!-- Deliverables Downloads -->
+    <div id="downloadGroup" class="hidden bg-emerald-950/20 border border-emerald-900/50 rounded-xl p-4 space-y-3">
+      <div class="text-xs font-bold uppercase tracking-wider text-emerald-400">Download Results</div>
+      <div class="flex flex-wrap gap-2.5">
+        <button id="dlMatched" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
+          <span>📦 Renamed_Matched_Images.zip</span>
+        </button>
+        <button id="dlUnmatched" class="bg-amber-600 hover:bg-amber-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
+          <span>📁 Unmatched_Images.zip</span>
+        </button>
+        <button id="dlExcel" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
+          <span>📊 Processed_Excel.xlsx</span>
+        </button>
+        <button id="dlAll" class="bg-purple-600 hover:bg-purple-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
+          <span>🗄️ Complete_Package.zip</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Verification Audit Table -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+      <div class="p-3 border-b border-slate-800 flex justify-between items-center text-xs text-slate-400 bg-slate-950/40">
+        <span class="font-medium">Verification Audit Table</span>
+        <input type="text" id="filterInput" placeholder="Filter by name/roll..." class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none" />
+      </div>
+      <div class="overflow-x-auto max-h-[550px]">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-950/80 sticky top-0 uppercase tracking-wider text-[11px] text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="p-3">Preview</th>
+              <th class="p-3">Original Filename</th>
+              <th class="p-3">Matched Candidate</th>
+              <th class="p-3">Assigned File Name</th>
+              <th class="p-3">Status</th>
+              <th class="p-3">Match Evidence</th>
+              <th class="p-3 text-center">Review & Fix</th>
+            </tr>
+          </thead>
+          <tbody id="resultsTable" class="divide-y divide-slate-800 font-mono text-[11px]">
+            <tr>
+              <td colspan="7" class="p-8 text-center text-slate-600 italic font-sans">
+                Upload candidate Excel and marksheet images, then click Start.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual Match & OCR Inspector Modal -->
+  <div id="inspectorModal" class="fixed inset-0 bg-black/85 hidden items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 max-w-5xl w-full p-6 rounded-2xl border border-slate-700 space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>Review Marksheet & OCR Inspector</span>
+          </h3>
+          <p id="modalFileName" class="text-xs text-slate-400 font-mono"></p>
+        </div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <!-- Image Preview & Zoom / Rotation -->
+        <div class="space-y-3">
+          <div class="border border-slate-800 rounded-lg overflow-hidden bg-black flex items-center justify-center h-80 p-2">
+            <img id="modalImgPreview" class="max-h-full max-w-full object-contain transition-transform duration-200" />
+          </div>
+          <div class="flex justify-between items-center text-xs">
+            <button id="btnRotateModal" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded font-semibold">Rotate 90°</button>
+            <span class="text-slate-500">Inspect faint text, seals or initials</span>
+          </div>
+        </div>
+
+        <!-- Candidate Selector & Raw OCR Reader -->
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-emerald-400 mb-1">Select Candidate from Excel Roster:</label>
+            <select id="modalCandidateSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"></select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Raw OCR Detected Text:</label>
+            <textarea id="modalOcrText" readonly class="w-full h-44 bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[11px] text-green-400 font-mono whitespace-pre-wrap leading-relaxed overflow-y-auto"></textarea>
+          </div>
+          <button id="btnApplyManualMatch" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg transition shadow-md">
+            ✓ Confirm Candidate & Assign Filename
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let candidatesList = [];
+    let imageFiles = [];
+    let processedResults = [];
+    let activeModalIndex = -1;
+    let modalRotation = 0;
+
+    function sanitizeString(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+        .trim();
+    }
+
+    function cleanToken(str) {
+      return sanitizeString(str).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    }
+
+    // Ingest Excel
+    document.getElementById('excelInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      candidatesList = [];
+
+      workbook.SheetNames.forEach(sheetName => {
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+        rows.forEach(r => {
+          const cleanRow = {};
+          Object.keys(r).forEach(k => cleanRow[sanitizeString(k)] = sanitizeString(r[k]));
+
+          let candName = cleanRow['Candidate Name'] || cleanRow['Student Name'] || cleanRow['Name'] || '';
+          let fileName = cleanRow['File Name'] || cleanRow['FileName'] || cleanRow['Target'] || '';
+
+          if (!candName && fileName && isNaN(Number(fileName))) {
+            candName = fileName;
+          }
+
+          const regNo = cleanRow['Registration Number'] || cleanRow['Enrollment No'] || cleanRow['Reg No'] || '';
+          const rollNo = cleanRow['Roll Number'] || cleanRow['Seat No'] || cleanRow['Roll No'] || '';
+          const university = cleanRow['University'] || cleanRow['Institute Name'] || cleanRow['College'] || '';
+
+          if (candName || fileName) {
+            const rawTokens = candName.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 1);
+            const significantTokens = rawTokens.filter(t => t.length >= 2);
+
+            candidatesList.push({
+              sheet: sheetName,
+              fileName: fileName || candName,
+              candName: candName,
+              tokens: significantTokens,
+              rawTokens: rawTokens,
+              regNo: regNo,
+              cleanReg: cleanToken(regNo),
+              rollNo: rollNo,
+              cleanRoll: cleanToken(rollNo),
+              university: university,
+              cleanUniv: cleanToken(university),
+              raw: cleanRow
             });
-          } catch (e1) {
-            try {
-              window.fetch = originalFetch;
-            } catch (e2) {}
+          }
+        });
+      });
+
+      document.getElementById('excelInfo').innerText = `✓ Loaded ${candidatesList.length} candidate rows from Excel.`;
+      checkReady();
+    });
+
+    document.getElementById('imageInput').addEventListener('change', (e) => {
+      imageFiles = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+      document.getElementById('imageInfo').innerText = `✓ Selected ${imageFiles.length} image files.`;
+      checkReady();
+    });
+
+    function checkReady() {
+      if (candidatesList.length > 0 && imageFiles.length > 0) {
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('statCounter').innerText = `0 / ${imageFiles.length} matched`;
+      }
+    }
+
+    async function prepareImageBlob(file, degrees = 0) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 1500;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          if (degrees === 90 || degrees === 270) {
+            canvas.width = height;
+            canvas.height = width;
+          } else {
+            canvas.width = width;
+            canvas.height = height;
+          }
+
+          ctx.translate(canvas.width / 2, canvas.height / 2);
+          ctx.rotate((degrees * Math.PI) / 180);
+          ctx.drawImage(img, -width / 2, -height / 2, width, height);
+          canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92);
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function findCandidateMatch(ocrText) {
+      const cleanOcr = cleanToken(ocrText);
+      const ocrTokens = ocrText.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 2);
+
+      let bestCand = null;
+      let maxScore = 0;
+      let matchReason = '';
+
+      for (const cand of candidatesList) {
+        let score = 0;
+        let reasons = [];
+
+        // 1. Reg No
+        if (cand.cleanReg.length >= 4 && cleanOcr.includes(cand.cleanReg)) {
+          score += 60;
+          reasons.push(`Reg: ${cand.regNo}`);
+        }
+
+        // 2. Roll No
+        if (cand.cleanRoll.length >= 4 && cleanOcr.includes(cand.cleanRoll)) {
+          score += 55;
+          reasons.push(`Roll: ${cand.rollNo}`);
+        }
+
+        // 3. Name Match with initial support
+        let matchedNameTokens = 0;
+        for (const token of cand.tokens) {
+          if (cleanOcr.includes(token) || ocrTokens.includes(token)) {
+            matchedNameTokens++;
           }
         }
-      } catch (err) {}
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
 
+        // Expansion handling (e.g. SUBIN DAS S <-> SUBIN DAS SIVADASAN, JANAKIRAMAN R <-> Janakiraman Rajendran)
+        if (matchedNameTokens === 0 && cand.tokens.length >= 2) {
+          if (cand.tokens.slice(0, 2).every(t => cleanOcr.includes(t))) {
+            matchedNameTokens = 2;
+          }
+        }
+
+        // Single primary token match (e.g. JANAKIRAMAN, KARTHIK)
+        if (matchedNameTokens === 0 && cand.tokens.length >= 1) {
+          const mainToken = cand.tokens[0];
+          if (mainToken.length >= 5 && cleanOcr.includes(mainToken)) {
+            matchedNameTokens = 1;
+          }
+        }
+
+        if (cand.tokens.length >= 2 && matchedNameTokens >= 2) {
+          score += 45;
+          reasons.push(`Name Tokens (${matchedNameTokens}/${cand.tokens.length})`);
+        } else if (matchedNameTokens >= 1 && cand.tokens[0].length >= 4) {
+          score += 35;
+          reasons.push(`Name: ${cand.tokens[0]}`);
+        }
+
+        // 4. University / Institute Match
+        if (cand.cleanUniv.length >= 4) {
+          const univParts = cand.university.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 4);
+          const matchedUnivParts = univParts.filter(p => cleanOcr.includes(p));
+          if (matchedUnivParts.length >= 1) {
+            score += 25;
+            reasons.push(`Univ: ${matchedUnivParts.join(' ')}`);
+          }
+        }
+
+        // Match threshold
+        if (score >= 45 && score > maxScore) {
+          maxScore = score;
+          bestCand = cand;
+          matchReason = reasons.join(' + ');
+        }
+      }
+
+      return bestCand ? { cand: bestCand, reason: matchReason } : null;
+    }
+
+    // Execution Pipeline
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('progressArea').classList.remove('hidden');
+      document.getElementById('liveStatus').classList.remove('hidden');
+      document.getElementById('downloadGroup').classList.add('hidden');
+      document.getElementById('resultsTable').innerHTML = '';
+      processedResults = [];
+
+      const numWorkers = Math.max(2, Math.min(navigator.hardwareConcurrency ? navigator.hardwareConcurrency - 1 : 4, 6));
+      document.getElementById('liveStatus').innerText = `Spawning ${numWorkers} parallel workers...`;
+
+      const pool = [];
+      for (let w = 0; w < numWorkers; w++) {
+        pool.push(await Tesseract.createWorker('eng'));
+      }
+
+      let completedCount = 0;
+      let matchedCount = 0;
+      const duplicateCounts = {};
+
+      async function processImage(file, worker) {
+        const ext = file.name.substring(file.name.lastIndexOf('.'));
+        let match = null;
+        let finalOcrText = '';
+
+        // Pass 1: Standard 0-degree orientation
+        const blob0 = await prepareImageBlob(file, 0);
+        try {
+          const res0 = await worker.recognize(blob0);
+          finalOcrText = res0.data.text || '';
+          match = findCandidateMatch(finalOcrText);
+        } catch (e) {}
+
+        // Pass 2: Rotations if unconfirmed
+        if (!match) {
+          for (const angle of [270, 90, 180]) {
+            const rotBlob = await prepareImageBlob(file, angle);
+            try {
+              const resR = await worker.recognize(rotBlob);
+              const txt = resR.data.text || '';
+              match = findCandidateMatch(txt);
+              if (match) {
+                finalOcrText += `\n[Rotated ${angle}°]\n` + txt;
+                match.reason += ` (at ${angle}°)`;
+                break;
+              }
+            } catch (e) {}
+          }
+        }
+
+        let assignedName = '';
+        let status = 'NOT';
+
+        if (match) {
+          status = 'DONE';
+          matchedCount++;
+          const targetBase = match.cand.fileName;
+          const count = duplicateCounts[targetBase] || 0;
+          duplicateCounts[targetBase] = count + 1;
+          assignedName = count === 0 ? `${targetBase}${ext}` : `${targetBase} (${String(count).padStart(2, '0')})${ext}`;
+        } else {
+          assignedName = file.name;
+        }
+
+        const record = {
+          file: file,
+          originalName: file.name,
+          assignedName: assignedName,
+          status: status,
+          matchedCandidate: match ? match.cand : null,
+          matchReason: match ? match.reason : 'No matching record found',
+          ocrText: finalOcrText,
+          ext: ext
+        };
+
+        processedResults.push(record);
+        renderRow(record, processedResults.length - 1);
+
+        completedCount++;
+        const pct = Math.round((completedCount / imageFiles.length) * 100);
+        document.getElementById('progressBar').style.width = pct + '%';
+        document.getElementById('progressPercent').innerText = pct + '%';
+        document.getElementById('progressFile').innerText = `[${completedCount}/${imageFiles.length}] ${file.name}`;
+        document.getElementById('statCounter').innerText = `${matchedCount} / ${imageFiles.length} matched`;
+      }
+
+      let fileIndex = 0;
+      async function runWorker(worker) {
+        while (fileIndex < imageFiles.length) {
+          const file = imageFiles[fileIndex++];
+          await processImage(file, worker);
+        }
+      }
+
+      document.getElementById('liveStatus').innerText = `Processing ${imageFiles.length} files...`;
+      await Promise.all(pool.map(w => runWorker(w)));
+
+      for (const w of pool) await w.terminate();
+
+      document.getElementById('liveStatus').innerText = 'Processing complete!';
+      document.getElementById('downloadGroup').classList.remove('hidden');
+      document.getElementById('startBtn').disabled = false;
+    });
+
+    function renderRow(record, idx) {
+      const tbody = document.getElementById('resultsTable');
+      const tr = document.createElement('tr');
+      tr.id = `row-${idx}`;
+      tr.className = record.status === 'DONE' ? 'hover:bg-slate-800/40 bg-emerald-950/10' : 'hover:bg-slate-800/40 bg-rose-950/10';
+      tr.innerHTML = `
+        <td class="p-3"><img src="${URL.createObjectURL(record.file)}" class="w-10 h-10 object-cover rounded border border-slate-700 bg-black cursor-pointer" onclick="openInspector(${idx})" /></td>
+        <td class="p-3 font-semibold text-slate-300">${record.originalName}</td>
+        <td class="p-3 font-sans">${record.matchedCandidate ? record.matchedCandidate.candName : '<span class="text-slate-500 italic">No Match</span>'}</td>
+        <td class="p-3 font-semibold ${record.status === 'DONE' ? 'text-emerald-400' : 'text-slate-500'}">${record.assignedName}</td>
+        <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${record.status === 'DONE' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-rose-900/60 text-rose-300'}">${record.status}</span></td>
+        <td class="p-3 text-slate-400 font-sans">${record.matchReason}</td>
+        <td class="p-3 text-center">
+          <button onclick="openInspector(${idx})" class="text-blue-400 hover:text-blue-300 underline font-sans text-xs">Review / Fix</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    // Modal Inspector & Manual Override
+    window.openInspector = function (idx) {
+      activeModalIndex = idx;
+      modalRotation = 0;
+      const rec = processedResults[idx];
+
+      document.getElementById('modalFileName').innerText = rec.originalName;
+      document.getElementById('modalImgPreview').src = URL.createObjectURL(rec.file);
+      document.getElementById('modalImgPreview').style.transform = 'rotate(0deg)';
+      document.getElementById('modalOcrText').value = rec.ocrText || '[No OCR text captured]';
+
+      const select = document.getElementById('modalCandidateSelect');
+      select.innerHTML = '<option value="">-- Select Candidate to Assign --</option>' + 
+        candidatesList.map((c, i) => `<option value="${i}" ${rec.matchedCandidate === c ? 'selected' : ''}>${c.fileName} | ${c.candName} (${c.university})</option>`).join('');
+
+      document.getElementById('inspectorModal').classList.remove('hidden');
+      document.getElementById('inspectorModal').classList.add('flex');
+    };
+
+    document.getElementById('btnRotateModal').onclick = () => {
+      modalRotation = (modalRotation + 90) % 360;
+      document.getElementById('modalImgPreview').style.transform = `rotate(${modalRotation}deg)`;
+    };
+
+    document.getElementById('btnApplyManualMatch').onclick = () => {
+      if (activeModalIndex < 0) return;
+      const select = document.getElementById('modalCandidateSelect');
+      const chosenIdx = select.value;
+      if (chosenIdx === '') {
+        alert('Please choose a candidate from the roster.');
+        return;
+      }
+
+      const chosenCandidate = candidatesList[chosenIdx];
+      const rec = processedResults[activeModalIndex];
+      rec.matchedCandidate = chosenCandidate;
+      rec.status = 'DONE';
+      rec.assignedName = `${chosenCandidate.fileName || 'Renamed'}${rec.ext}`;
+      rec.matchReason = 'Manual User Override';
+
+      const tr = document.getElementById(`row-${activeModalIndex}`);
+      if (tr) {
+        tr.className = 'hover:bg-slate-800/40 bg-emerald-950/10';
+        tr.innerHTML = `
+          <td class="p-3"><img src="${URL.createObjectURL(rec.file)}" class="w-10 h-10 object-cover rounded border border-slate-700 bg-black cursor-pointer" onclick="openInspector(${activeModalIndex})" /></td>
+          <td class="p-3 font-semibold text-slate-300">${rec.originalName}</td>
+          <td class="p-3 font-sans">${chosenCandidate.candName} <span class="text-slate-500 font-mono">(${chosenCandidate.fileName})</span></td>
+          <td class="p-3 font-semibold text-emerald-400">${rec.assignedName}</td>
+          <td class="p-3">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300">DONE</span>
+          </td>
+          <td class="p-3 text-slate-400 font-sans">Manual User Override</td>
+          <td class="p-3 text-center">
+            <button onclick="openInspector(${activeModalIndex})" class="text-blue-400 hover:text-blue-300 underline font-sans text-xs">Review / Fix</button>
+          </td>
+        `;
+      }
+      closeModal();
+    };
+
+    window.closeModal = function () {
+      document.getElementById('inspectorModal').classList.add('hidden');
+      document.getElementById('inspectorModal').classList.remove('flex');
+    };
+
+    // Filter table
+    document.getElementById('filterInput').addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      processedResults.forEach((rec, idx) => {
+        const tr = document.getElementById(`row-${idx}`);
+        if (!tr) return;
+        const text = (rec.originalName + ' ' + (rec.matchedCandidate ? rec.matchedCandidate.candName : '') + ' ' + rec.assignedName).toLowerCase();
+        tr.style.display = text.includes(q) ? '' : 'none';
+      });
+    });
+
+    // Deliverables Packagers
+    document.getElementById('dlMatched').onclick = async () => {
+      const zip = new JSZip();
+      const matched = processedResults.filter(r => r.status === 'DONE');
+      if (!matched.length) return alert('No matched images.');
+      matched.forEach(r => zip.file(r.assignedName, r.file));
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'Renamed_Matched_Images.zip');
+    };
+
+    document.getElementById('dlUnmatched').onclick = async () => {
+      const zip = new JSZip();
+      const unmatched = processedResults.filter(r => r.status === 'NOT');
+      if (!unmatched.length) return alert('No unmatched images.');
+      unmatched.forEach(r => zip.file(r.originalName, r.file));
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'Unmatched_Images.zip');
+    };
+
+    document.getElementById('dlExcel').onclick = () => {
+      const exportData = candidatesList.map(c => {
+        const matches = processedResults.filter(r => r.matchedCandidate === c);
+        return {
+          ...c.raw,
+          'Processing Status': matches.length > 0 ? 'DONE' : 'NOT',
+          'Assigned Filename(s)': matches.map(m => m.assignedName).join(', ')
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Processed_Candidates');
+      XLSX.writeFile(wb, 'Processed_Excel.xlsx');
+    };
+
+    document.getElementById('dlAll').onclick = async () => {
+      const zip = new JSZip();
+      const mFolder = zip.folder('Renamed_Matched_Images');
+      const uFolder = zip.folder('Unmatched_Images');
+
+      processedResults.forEach(r => {
+        if (r.status === 'DONE') {
+          mFolder.file(r.assignedName, r.file);
+        } else {
+          uFolder.file(r.originalName, r.file);
+        }
+      });
+
+      const exportData = candidatesList.map(c => {
+        const matches = processedResults.filter(r => r.matchedCandidate === c);
+        return {
+          ...c.raw,
+          'Processing Status': matches.length > 0 ? 'DONE' : 'NOT',
+          'Assigned Filename(s)': matches.map(m => m.assignedName).join(', ')
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Processed');
+      const excelBuf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      zip.file('Processed_Excel.xlsx', excelBuf);
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'Complete_Package.zip');
+    };
+  </script>
+</body>
+</html>
