@@ -130,7 +130,7 @@
       <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
         <!-- Image Preview & Zoom / Rotation -->
         <div class="space-y-3">
-          <div class="border border-slate-800 rounded-lg overflow-hidden bg-black flex items-center justify-center h-80 p-2">
+          <div id="zoomViewport" class="border border-slate-800 rounded-lg overflow-hidden bg-black flex items-center justify-center h-80 p-2 cursor-crosshair">
             <img id="modalImgPreview" class="max-h-full max-w-full object-contain transition-transform duration-200" />
           </div>
           <div class="flex justify-between items-center text-xs">
@@ -142,6 +142,8 @@
         <!-- Candidate Selector & Raw OCR Reader -->
         <div class="space-y-3">
           <div>
+            <label class="block text-xs font-semibold text-emerald-400 mb-1">Search candidate by name / filename:</label>
+            <input id="candidateSearchInput" type="text" placeholder="Type candidate name..." class="w-full mb-2 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500" />
             <label class="block text-xs font-semibold text-emerald-400 mb-1">Select Candidate from Excel Roster:</label>
             <select id="modalCandidateSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"></select>
           </div>
@@ -199,7 +201,9 @@
 
           const regNo = cleanRow['Registration Number'] || cleanRow['Enrollment No'] || cleanRow['Reg No'] || '';
           const rollNo = cleanRow['Roll Number'] || cleanRow['Seat No'] || cleanRow['Roll No'] || '';
-          const university = cleanRow['University'] || cleanRow['Institute Name'] || cleanRow['College'] || '';
+          const university = cleanRow['University'] || cleanRow['University Name'] || cleanRow['Board'] || '';
+          const institute = cleanRow['Institute Name'] || cleanRow['Institute'] || cleanRow['College'] || '';
+          const course = cleanRow['Course'] || cleanRow['Course Name'] || cleanRow['Qualification'] || cleanRow['Programme'] || '';
 
           if (candName || fileName) {
             const rawTokens = candName.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 1);
@@ -217,6 +221,11 @@
               cleanRoll: cleanToken(rollNo),
               university: university,
               cleanUniv: cleanToken(university),
+              institute: institute,
+              cleanInstitute: cleanToken(institute),
+              course: course,
+              cleanCourse: cleanToken(course),
+              used: false,
               raw: cleanRow
             });
           }
@@ -240,16 +249,17 @@
       }
     }
 
-    async function prepareImageBlob(file, degrees = 0) {
+    async function prepareImageBlob(file, degrees = 0, enhance = false) {
       return new Promise((resolve) => {
         const img = new Image();
+        img.onerror = () => resolve(null);
         img.onload = () => {
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           
           let width = img.width;
           let height = img.height;
-          const maxDim = 1500;
+          const maxDim = 2400;
           if (width > maxDim || height > maxDim) {
             if (width > height) {
               height = Math.round((height * maxDim) / width);
@@ -271,89 +281,109 @@
           ctx.translate(canvas.width / 2, canvas.height / 2);
           ctx.rotate((degrees * Math.PI) / 180);
           ctx.drawImage(img, -width / 2, -height / 2, width, height);
-          canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92);
+          if (enhance) {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const px = imageData.data;
+            for (let i = 0; i < px.length; i += 4) {
+              const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+              const boosted = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
+              const value = boosted < 178 ? 0 : 255;
+              px[i] = px[i + 1] = px[i + 2] = value;
+            }
+            ctx.putImageData(imageData, 0, 0);
+          }
+          canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.96);
         };
         img.src = URL.createObjectURL(file);
       });
     }
 
-    function findCandidateMatch(ocrText) {
-      const cleanOcr = cleanToken(ocrText);
-      const ocrTokens = ocrText.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 2);
-
-      let bestCand = null;
-      let maxScore = 0;
-      let matchReason = '';
-
-      for (const cand of candidatesList) {
-        let score = 0;
-        let reasons = [];
-
-        // 1. Reg No
-        if (cand.cleanReg.length >= 4 && cleanOcr.includes(cand.cleanReg)) {
-          score += 60;
-          reasons.push(`Reg: ${cand.regNo}`);
-        }
-
-        // 2. Roll No
-        if (cand.cleanRoll.length >= 4 && cleanOcr.includes(cand.cleanRoll)) {
-          score += 55;
-          reasons.push(`Roll: ${cand.rollNo}`);
-        }
-
-        // 3. Name Match with initial support
-        let matchedNameTokens = 0;
-        for (const token of cand.tokens) {
-          if (cleanOcr.includes(token) || ocrTokens.includes(token)) {
-            matchedNameTokens++;
-          }
-        }
-
-        // Expansion handling (e.g. SUBIN DAS S <-> SUBIN DAS SIVADASAN, JANAKIRAMAN R <-> Janakiraman Rajendran)
-        if (matchedNameTokens === 0 && cand.tokens.length >= 2) {
-          if (cand.tokens.slice(0, 2).every(t => cleanOcr.includes(t))) {
-            matchedNameTokens = 2;
-          }
-        }
-
-        // Single primary token match (e.g. JANAKIRAMAN, KARTHIK)
-        if (matchedNameTokens === 0 && cand.tokens.length >= 1) {
-          const mainToken = cand.tokens[0];
-          if (mainToken.length >= 5 && cleanOcr.includes(mainToken)) {
-            matchedNameTokens = 1;
-          }
-        }
-
-        if (cand.tokens.length >= 2 && matchedNameTokens >= 2) {
-          score += 45;
-          reasons.push(`Name Tokens (${matchedNameTokens}/${cand.tokens.length})`);
-        } else if (matchedNameTokens >= 1 && cand.tokens[0].length >= 4) {
-          score += 35;
-          reasons.push(`Name: ${cand.tokens[0]}`);
-        }
-
-        // 4. University / Institute Match
-        if (cand.cleanUniv.length >= 4) {
-          const univParts = cand.university.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 4);
-          const matchedUnivParts = univParts.filter(p => cleanOcr.includes(p));
-          if (matchedUnivParts.length >= 1) {
-            score += 25;
-            reasons.push(`Univ: ${matchedUnivParts.join(' ')}`);
-          }
-        }
-
-        // Match threshold
-        if (score >= 45 && score > maxScore) {
-          maxScore = score;
-          bestCand = cand;
-          matchReason = reasons.join(' + ');
-        }
+    function normWords(str) {
+      return sanitizeString(str).toUpperCase().replace(/&/g, ' AND ')
+        .replace(/[^A-Z0-9]+/g, ' ').trim().split(/\s+/)
+        .filter(t => t.length >= 2 && !['OF','THE','AND','FOR','IN','AT','A','AN'].includes(t));
+    }
+    function editDistanceAtMostOne(a, b) {
+      if (a === b) return true;
+      if (Math.abs(a.length-b.length) > 1) return false;
+      let i=0, j=0, edits=0;
+      while (i<a.length && j<b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++edits > 1) return false;
+        if (a.length > b.length) i++;
+        else if (b.length > a.length) j++;
+        else { i++; j++; }
       }
-
-      return bestCand ? { cand: bestCand, reason: matchReason } : null;
+      if (i<a.length || j<b.length) edits++;
+      return edits <= 1;
+    }
+    function fieldCoverage(expected, ocrText) {
+      const exp = normWords(expected).filter(t => t.length >= 3);
+      if (!exp.length) return null;
+      const got = [...new Set(normWords(ocrText))];
+      let hits = 0;
+      for (const token of exp) {
+        if (got.includes(token)) { hits++; continue; }
+        const near = got.some(w => w.length >= 5 && token.length >= 5 &&
+          Math.abs(w.length-token.length) <= 1 && editDistanceAtMostOne(w, token));
+        if (near) hits++;
+      }
+      return hits / exp.length;
     }
 
-    // Execution Pipeline
+    function findCandidateMatch(ocrText) {
+      const eligible = [];
+      const ocrWords = normWords(ocrText);
+      const cleanOcr = cleanToken(ocrText);
+
+      for (const cand of candidatesList) {
+        if (cand.used) continue;
+        const nameCov = fieldCoverage(cand.candName, ocrText);
+        const univCov = fieldCoverage(cand.university, ocrText);
+        const instCov = fieldCoverage(cand.institute, ocrText);
+        const courseCov = fieldCoverage(cand.course, ocrText);
+        if ([nameCov, univCov, instCov, courseCov].some(v => v === null)) continue;
+
+        const nameWords = normWords(cand.candName).filter(t => t.length >= 3);
+        const nameHits = nameWords.filter(t => ocrWords.includes(t) ||
+          ocrWords.some(w => w.length >= 5 && t.length >= 5 &&
+            Math.abs(w.length-t.length) <= 1 && editDistanceAtMostOne(w,t))).length;
+        const nameMin = nameWords.length <= 2 ? nameWords.length : Math.max(2, Math.ceil(nameWords.length * 0.60));
+        const reg = cand.cleanReg.length >= 4 &&
+          candidatesList.filter(c => c.cleanReg === cand.cleanReg).length === 1 &&
+          cleanOcr.includes(cand.cleanReg);
+        const roll = cand.cleanRoll.length >= 4 &&
+          candidatesList.filter(c => c.cleanRoll === cand.cleanRoll).length === 1 &&
+          cleanOcr.includes(cand.cleanRoll);
+
+        const academic = [
+          { label: 'University', cov: univCov, min: 0.20 },
+          { label: 'Institute', cov: instCov, min: 0.18 },
+          { label: 'Course', cov: courseCov, min: 0.18 }
+        ];
+        const academicHits = academic.filter(f => f.cov >= f.min).length;
+        const nameStrong = nameCov >= 0.50 && nameHits >= nameMin;
+        // Transcript pages may omit the candidate's full name. An exact registration/roll
+        // number plus academic evidence is sufficient when the ID is unique in the roster.
+        if (!((nameStrong && academicHits >= 2) || ((reg || roll) && academicHits >= 1))) continue;
+
+        const score = nameCov * 42 + univCov * 18 + instCov * 22 + courseCov * 18 +
+          (reg ? 12 : 0) + (roll ? 9 : 0) + academicHits * 2;
+        eligible.push({cand, score, nameCov, univCov, instCov, courseCov, reg, roll});
+      }
+
+      eligible.sort((a,b) => b.score-a.score);
+      if (!eligible.length) return null;
+      if (eligible.length > 1 && eligible[0].score - eligible[1].score < 7) return null;
+
+      const m = eligible[0];
+      return {
+        cand: m.cand,
+        reason: `Multi-field OCR match — Name ${Math.round(m.nameCov*100)}%, University ${Math.round(m.univCov*100)}%, Institute ${Math.round(m.instCov*100)}%, Course ${Math.round(m.courseCov*100)}%${m.reg?', Registration confirmed':''}${m.roll?', Roll confirmed':''}`
+      };
+    }
+
+        // Execution Pipeline
     document.getElementById('startBtn').addEventListener('click', async () => {
       document.getElementById('startBtn').disabled = true;
       document.getElementById('progressArea').classList.remove('hidden');
@@ -361,8 +391,9 @@
       document.getElementById('downloadGroup').classList.add('hidden');
       document.getElementById('resultsTable').innerHTML = '';
       processedResults = [];
+      candidatesList.forEach(c => { c.used = false; });
 
-      const numWorkers = Math.max(2, Math.min(navigator.hardwareConcurrency ? navigator.hardwareConcurrency - 1 : 4, 6));
+      const numWorkers = Math.max(1, Math.min(navigator.hardwareConcurrency ? navigator.hardwareConcurrency - 1 : 2, 3));
       document.getElementById('liveStatus').innerText = `Spawning ${numWorkers} parallel workers...`;
 
       const pool = [];
@@ -382,16 +413,35 @@
         // Pass 1: Standard 0-degree orientation
         const blob0 = await prepareImageBlob(file, 0);
         try {
+          if (!blob0) throw new Error('Could not decode image');
           const res0 = await worker.recognize(blob0);
           finalOcrText = res0.data.text || '';
           match = findCandidateMatch(finalOcrText);
         } catch (e) {}
 
-        // Pass 2: Rotations if unconfirmed
+        // Pass 2: Enhanced contrast/threshold retry for faint or low-contrast text.
+        if (!match) {
+          const enhancedBlob = await prepareImageBlob(file, 0, true);
+          try {
+            if (enhancedBlob) {
+              const enhancedRes = await worker.recognize(enhancedBlob);
+              const enhancedText = enhancedRes.data.text || '';
+              const enhancedMatch = findCandidateMatch(enhancedText);
+              finalOcrText += `\n[Enhanced OCR pass]\n` + enhancedText;
+              if (enhancedMatch) {
+                match = enhancedMatch;
+                match.reason += ' (enhanced OCR)';
+              }
+            }
+          } catch (e) {}
+        }
+
+        // Pass 3: Rotations if still unconfirmed.
         if (!match) {
           for (const angle of [270, 90, 180]) {
             const rotBlob = await prepareImageBlob(file, angle);
             try {
+              if (!rotBlob) continue;
               const resR = await worker.recognize(rotBlob);
               const txt = resR.data.text || '';
               match = findCandidateMatch(txt);
@@ -407,14 +457,13 @@
         let assignedName = '';
         let status = 'NOT';
 
-        if (match) {
+        if (match && !match.cand.used) {
           status = 'DONE';
           matchedCount++;
-          const targetBase = match.cand.fileName;
-          const count = duplicateCounts[targetBase] || 0;
-          duplicateCounts[targetBase] = count + 1;
-          assignedName = count === 0 ? `${targetBase}${ext}` : `${targetBase} (${String(count).padStart(2, '0')})${ext}`;
+          match.cand.used = true;
+          assignedName = `${match.cand.fileName}${ext}`;
         } else {
+          match = null;
           assignedName = file.name;
         }
 
@@ -488,13 +537,40 @@
       document.getElementById('modalImgPreview').style.transform = 'rotate(0deg)';
       document.getElementById('modalOcrText').value = rec.ocrText || '[No OCR text captured]';
 
+      document.getElementById('candidateSearchInput').value = '';
+      populateCandidateOptions('');
       const select = document.getElementById('modalCandidateSelect');
-      select.innerHTML = '<option value="">-- Select Candidate to Assign --</option>' + 
-        candidatesList.map((c, i) => `<option value="${i}" ${rec.matchedCandidate === c ? 'selected' : ''}>${c.fileName} | ${c.candName} (${c.university})</option>`).join('');
+      if (rec.matchedCandidate) select.value = String(candidatesList.indexOf(rec.matchedCandidate));
 
       document.getElementById('inspectorModal').classList.remove('hidden');
       document.getElementById('inspectorModal').classList.add('flex');
     };
+
+    function populateCandidateOptions(query) {
+      const select = document.getElementById('modalCandidateSelect');
+      const rec = activeModalIndex >= 0 ? processedResults[activeModalIndex] : null;
+      const q = (query || '').toLowerCase().trim();
+      const options = candidatesList.map((c, i) => ({c, i})).filter(({c}) =>
+        !q || `${c.candName} ${c.fileName} ${c.university} ${c.institute} ${c.course}`.toLowerCase().includes(q));
+      select.innerHTML = '<option value="">-- Select Candidate to Assign --</option>' +
+        options.map(({c,i}) => `<option value="${i}" ${rec && rec.matchedCandidate === c ? 'selected' : ''}>${c.fileName} | ${c.candName} | ${c.university} | ${c.institute} | ${c.course}</option>`).join('');
+    }
+    document.getElementById('candidateSearchInput').addEventListener('input', e => populateCandidateOptions(e.target.value));
+
+    const zoomViewport = document.getElementById('zoomViewport');
+    const zoomImage = document.getElementById('modalImgPreview');
+    zoomViewport.addEventListener('mousemove', e => {
+      if (!zoomImage.src) return;
+      const r = zoomViewport.getBoundingClientRect();
+      const x = ((e.clientX-r.left)/r.width)*100;
+      const y = ((e.clientY-r.top)/r.height)*100;
+      zoomImage.style.transformOrigin = `${x}% ${y}%`;
+      zoomImage.style.transform = `rotate(${modalRotation}deg) scale(2.2)`;
+    });
+    zoomViewport.addEventListener('mouseleave', () => {
+      zoomImage.style.transform = `rotate(${modalRotation}deg)`;
+      zoomImage.style.transformOrigin = 'center center';
+    });
 
     document.getElementById('btnRotateModal').onclick = () => {
       modalRotation = (modalRotation + 90) % 360;
@@ -512,6 +588,14 @@
 
       const chosenCandidate = candidatesList[chosenIdx];
       const rec = processedResults[activeModalIndex];
+      const collision = processedResults.some((other, i) => i !== activeModalIndex &&
+        other.status === 'DONE' && other.matchedCandidate === chosenCandidate);
+      if (collision) {
+        alert('This candidate is already assigned to another image. Review that image first to avoid duplicate filenames.');
+        return;
+      }
+      if (rec.matchedCandidate) rec.matchedCandidate.used = false;
+      chosenCandidate.used = true;
       rec.matchedCandidate = chosenCandidate;
       rec.status = 'DONE';
       rec.assignedName = `${chosenCandidate.fileName || 'Renamed'}${rec.ext}`;
@@ -548,7 +632,8 @@
       processedResults.forEach((rec, idx) => {
         const tr = document.getElementById(`row-${idx}`);
         if (!tr) return;
-        const text = (rec.originalName + ' ' + (rec.matchedCandidate ? rec.matchedCandidate.candName : '') + ' ' + rec.assignedName).toLowerCase();
+        const c = rec.matchedCandidate;
+        const text = (rec.originalName + ' ' + (c ? `${c.candName} ${c.fileName} ${c.university} ${c.institute} ${c.course}` : '') + ' ' + rec.assignedName).toLowerCase();
         tr.style.display = text.includes(q) ? '' : 'none';
       });
     });
