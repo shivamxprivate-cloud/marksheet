@@ -18,9 +18,9 @@
       <div>
         <h1 class="text-xl md:text-2xl font-black text-white flex items-center gap-2">
           <span>Marksheet Matcher & Bulk Renamer</span>
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">v10.0 Review & Inspect Ready</span>
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">v11.0 Fast & Sheet-Safe</span>
         </h1>
-        <p class="text-xs text-slate-400 mt-0.5">High-speed OCR, Unicode-sanitized matching, and manual verification inspector.</p>
+        <p class="text-xs text-slate-400 mt-0.5">Optimized parallel OCR, conservative matching, and separate Excel outputs for each source sheet.</p>
       </div>
       <button onclick="location.reload()" class="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 px-3 py-1.5 rounded-lg transition font-medium">
         ⟳ Reset All
@@ -75,10 +75,10 @@
           <span>📁 Unmatched_Images.zip</span>
         </button>
         <button id="dlExcel" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
-          <span>📊 Processed_Excel.xlsx</span>
+          <span>📊 Processed Excel (separate by sheet)</span>
         </button>
         <button id="dlAll" class="bg-purple-600 hover:bg-purple-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
-          <span>🗄️ Complete_Package.zip</span>
+          <span>🗄️ Complete Package (separate sheets)</span>
         </button>
       </div>
     </div>
@@ -259,7 +259,7 @@
           
           let width = img.width;
           let height = img.height;
-          const maxDim = 2400;
+          const maxDim = 2000;
           if (width > maxDim || height > maxDim) {
             if (width > height) {
               height = Math.round((height * maxDim) / width);
@@ -393,13 +393,14 @@
       processedResults = [];
       candidatesList.forEach(c => { c.used = false; });
 
-      const numWorkers = Math.max(1, Math.min(navigator.hardwareConcurrency ? navigator.hardwareConcurrency - 1 : 2, 3));
-      document.getElementById('liveStatus').innerText = `Spawning ${numWorkers} parallel workers...`;
+      const cores = navigator.hardwareConcurrency || 4;
+      const numWorkers = Math.max(1, Math.min(cores >= 8 ? 4 : cores >= 4 ? 3 : 2, imageFiles.length));
+      document.getElementById('liveStatus').innerText = `Starting ${numWorkers} parallel OCR workers...`;
 
-      const pool = [];
-      for (let w = 0; w < numWorkers; w++) {
-        pool.push(await Tesseract.createWorker('eng'));
-      }
+      // Initialize workers concurrently instead of waiting for each worker in sequence.
+      const pool = await Promise.all(Array.from({ length: numWorkers }, () => Tesseract.createWorker('eng')));
+      // Sparse, general-document layout is usually faster than Tesseract's default auto mode.
+      await Promise.all(pool.map(w => w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }))); 
 
       let completedCount = 0;
       let matchedCount = 0;
@@ -436,9 +437,11 @@
           } catch (e) {}
         }
 
-        // Pass 3: Rotations if still unconfirmed.
+        // Pass 3: Try quarter-turn rotations only when still unmatched. Skip 180° unless
+        // the first OCR pass returned very little text; this avoids expensive redundant passes.
         if (!match) {
-          for (const angle of [270, 90, 180]) {
+          const rotationAngles = finalOcrText.trim().length < 80 ? [90, 270, 180] : [90, 270];
+          for (const angle of rotationAngles) {
             const rotBlob = await prepareImageBlob(file, angle);
             try {
               if (!rotBlob) continue;
@@ -657,19 +660,45 @@
       saveAs(blob, 'Unmatched_Images.zip');
     };
 
-    document.getElementById('dlExcel').onclick = () => {
-      const exportData = candidatesList.map(c => {
+    // Keep every original worksheet in its own output workbook. Never flatten
+    // Normal, Special, or other source sheets into one combined candidate sheet.
+    function getProcessedRowsForSheet(sheetName) {
+      return candidatesList.filter(c => c.sheet === sheetName).map(c => {
         const matches = processedResults.filter(r => r.matchedCandidate === c);
         return {
           ...c.raw,
-          'Processing Status': matches.length > 0 ? 'DONE' : 'NOT',
+          'Processing Status': matches.length ? 'DONE' : 'NOT',
           'Assigned Filename(s)': matches.map(m => m.assignedName).join(', ')
         };
       });
-      const ws = XLSX.utils.json_to_sheet(exportData);
+    }
+
+    function makeSheetWorkbook(sheetName) {
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Processed_Candidates');
-      XLSX.writeFile(wb, 'Processed_Excel.xlsx');
+      const rows = getProcessedRowsForSheet(sheetName);
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const safeSheet = String(sheetName || 'Sheet1').slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, safeSheet || 'Sheet1');
+      return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    }
+
+    function safeFilePart(name) {
+      return String(name || 'Sheet').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sheet';
+    }
+
+    document.getElementById('dlExcel').onclick = async () => {
+      const sheetNames = [...new Set(candidatesList.map(c => c.sheet))];
+      if (sheetNames.length <= 1) {
+        const name = sheetNames[0] || 'Candidates';
+        saveAs(new Blob([makeSheetWorkbook(name)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${safeFilePart(name)}_Processed.xlsx`);
+        return;
+      }
+      const zip = new JSZip();
+      for (const sheetName of sheetNames) {
+        zip.file(`Processed_Excel_By_Sheet/${safeFilePart(sheetName)}_Processed.xlsx`, makeSheetWorkbook(sheetName));
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'Processed_Excel_By_Sheet.zip');
     };
 
     document.getElementById('dlAll').onclick = async () => {
@@ -678,29 +707,31 @@
       const uFolder = zip.folder('Unmatched_Images');
 
       processedResults.forEach(r => {
-        if (r.status === 'DONE') {
-          mFolder.file(r.assignedName, r.file);
-        } else {
-          uFolder.file(r.originalName, r.file);
-        }
+        if (r.status === 'DONE') mFolder.file(r.assignedName, r.file);
+        else uFolder.file(r.originalName, r.file);
       });
 
-      const exportData = candidatesList.map(c => {
-        const matches = processedResults.filter(r => r.matchedCandidate === c);
-        return {
-          ...c.raw,
-          'Processing Status': matches.length > 0 ? 'DONE' : 'NOT',
-          'Assigned Filename(s)': matches.map(m => m.assignedName).join(', ')
-        };
-      });
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Processed');
-      const excelBuf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      zip.file('Processed_Excel.xlsx', excelBuf);
+      const sheetNames = [...new Set(candidatesList.map(c => c.sheet))];
+      const excelFolder = zip.folder('Processed_Excel_By_Sheet');
+      for (const sheetName of sheetNames) {
+        excelFolder.file(`${safeFilePart(sheetName)}_Processed.xlsx`, makeSheetWorkbook(sheetName));
+      }
 
-      const blob = await zip.generateAsync({ type: 'blob' });
+      // Include a simple audit file explaining why spreadsheets are split.
+      zip.file('README.txt', [
+        'Complete Package',
+        '',
+        'Each original Excel worksheet is exported as a separate workbook under Processed_Excel_By_Sheet/.',
+        'Worksheets such as Normal and Special are not combined into one workbook or one data table.',
+        'DONE means the matcher assigned a candidate. NOT means the file needs manual review.',
+        'OCR is not guaranteed to be 100% accurate; verify uncertain matches before using the filenames.'
+      ].join('\n'));
+
+      const blob = await zip.generateAsync({ type: 'blob' }, meta => {
+        document.getElementById('liveStatus').innerText = `Building ZIP... ${Math.round(meta.percent)}%`;
+      });
       saveAs(blob, 'Complete_Package.zip');
+      document.getElementById('liveStatus').innerText = 'Complete package downloaded.';
     };
   </script>
 </body>
