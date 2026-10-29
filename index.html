@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Precision Marksheet Matcher & Review Workbench</title>
+  <title>Precision Marksheet Matcher & Multi-Doc Renamer</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
@@ -18,9 +18,9 @@
       <div>
         <h1 class="text-xl md:text-2xl font-black text-white flex items-center gap-2">
           <span>Marksheet Matcher & Bulk Renamer</span>
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">v11.1 Resilient Parser</span>
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">v11.2 Multi-Doc Enabled</span>
         </h1>
-        <p class="text-xs text-slate-400 mt-0.5">Optimized parallel OCR, conservative matching, and separate Excel outputs for each source sheet.</p>
+        <p class="text-xs text-slate-400 mt-0.5">Supports multi-page & multiple documents per candidate with auto-sequence numbering `(01)`, `(02)`.</p>
       </div>
       <button onclick="location.reload()" class="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 px-3 py-1.5 rounded-lg transition font-medium">
         ⟳ Reset All
@@ -30,7 +30,7 @@
     <!-- Upload Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div class="bg-slate-900/90 border border-slate-800/80 rounded-xl p-4 space-y-2">
-        <label class="block text-xs font-bold uppercase tracking-wider text-emerald-400">Step 1: Upload Excel (Book1.xlsx or Candidate List)</label>
+        <label class="block text-xs font-bold uppercase tracking-wider text-emerald-400">Step 1: Upload Candidate Excel</label>
         <input type="file" id="excelInput" accept=".xlsx, .xls, .csv" class="block w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer" />
         <div id="excelInfo" class="text-[11px] text-slate-400 truncate">Select candidate Excel (.xlsx)</div>
       </div>
@@ -46,7 +46,7 @@
     <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
       <div class="flex items-center gap-3 w-full md:w-auto">
         <button id="startBtn" disabled class="w-full md:w-auto bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs px-6 py-2.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed">
-          ▶ Start Fast Matching & Renaming
+          ▶ Start Multi-Doc Matching & Renaming
         </button>
         <span id="liveStatus" class="text-xs font-mono text-slate-400 truncate max-w-md hidden">Ready</span>
       </div>
@@ -78,7 +78,7 @@
           <span>📊 Processed Excel (separate by sheet)</span>
         </button>
         <button id="dlAll" class="bg-purple-600 hover:bg-purple-500 text-white text-xs px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5">
-          <span>🗄️ Complete Package (separate sheets)</span>
+          <span>🗄️ Complete Package (All-in-One)</span>
         </button>
       </div>
     </div>
@@ -140,8 +140,8 @@
 
         <div class="space-y-3">
           <div>
-            <label class="block text-xs font-semibold text-emerald-400 mb-1">Search candidate by name / filename:</label>
-            <input id="candidateSearchInput" type="text" placeholder="Type candidate name..." class="w-full mb-2 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500" />
+            <label class="block text-xs font-semibold text-emerald-400 mb-1">Search candidate by name / roll / filename:</label>
+            <input id="candidateSearchInput" type="text" placeholder="Type candidate name or roll number..." class="w-full mb-2 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500" />
             <label class="block text-xs font-semibold text-emerald-400 mb-1">Select Candidate from Excel Roster:</label>
             <select id="modalCandidateSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"></select>
           </div>
@@ -184,7 +184,7 @@
       return '';
     }
 
-    // Ingest Excel (Resilient Parser)
+    // Ingest Excel (Resilient + Universal Key Normalization)
     document.getElementById('excelInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -198,11 +198,9 @@
           const sheet = workbook.Sheets[sheetName];
           if (!sheet) return;
 
-          // Convert sheet to array of rows to reliably determine headers
           const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
           if (!matrix || matrix.length === 0) return;
 
-          // Find row index containing column headers
           let headerRowIdx = -1;
           for (let i = 0; i < Math.min(matrix.length, 10); i++) {
             const rowStr = matrix[i].map(c => cleanToken(c)).join(' ');
@@ -211,7 +209,7 @@
               break;
             }
           }
-          if (headerRowIdx === -1) headerRowIdx = 0; // Default to top row if no keyword is hit
+          if (headerRowIdx === -1) headerRowIdx = 0;
 
           const headers = matrix[headerRowIdx].map(h => cleanToken(h));
 
@@ -228,59 +226,26 @@
               cleanRawRow[origH] = val;
             });
 
-            // Extract Target File Name
             let fileName = getNormalizedField(normRow, [
               'FILENAME', 'FILE', 'TARGET', 'TARGETFILENAME', 'ASSIGNEDFILENAME', 'DOCUMENTNAME', 'DOCNAME', 'ID'
             ]);
 
-            // Extract Candidate / Student Name
             let candName = getNormalizedField(normRow, [
               'CANDIDATENAME', 'STUDENTNAME', 'NAME', 'STUDENT', 'CANDIDATE', 'FULLNAME'
             ]);
 
-            // Clean float artifact from numeric values (e.g. 10245.0)
-            if (fileName.endsWith('.0') && /^\d+\.0$/.test(fileName)) {
-              fileName = fileName.slice(0, -2);
-            }
-            if (candName.endsWith('.0') && /^\d+\.0$/.test(candName)) {
-              candName = candName.slice(0, -2);
-            }
+            if (fileName.endsWith('.0') && /^\d+\.0$/.test(fileName)) fileName = fileName.slice(0, -2);
+            if (candName.endsWith('.0') && /^\d+\.0$/.test(candName)) candName = candName.slice(0, -2);
 
-            // Cross-fallback
-            if (!candName && fileName && isNaN(Number(fileName))) {
-              candName = fileName;
-            } else if (!fileName && candName) {
-              fileName = candName;
-            } else if (!fileName && !candName) {
-              // Attempt to fall back to first non-empty alphanumeric column
-              for (const key of Object.keys(normRow)) {
-                if (normRow[key] && normRow[key].length >= 3) {
-                  fileName = normRow[key];
-                  candName = normRow[key];
-                  break;
-                }
-              }
-            }
+            if (!candName && fileName && isNaN(Number(fileName))) candName = fileName;
+            else if (!fileName && candName) fileName = candName;
 
-            // Extract Identifiers
-            const regNo = getNormalizedField(normRow, [
-              'REGISTRATIONNUMBER', 'REGISTRATIONNO', 'REGNO', 'ENROLLMENTNO', 'ENROLLMENTNUMBER', 'ENROLMENTNO', 'ENROLMENT'
-            ]);
-            const rollNo = getNormalizedField(normRow, [
-              'ROLLNUMBER', 'ROLLNO', 'SEATNO', 'SEATNUMBER', 'ROLL'
-            ]);
-            const certNo = getNormalizedField(normRow, [
-              'CERTIFICATENUMBER', 'CERTIFICATENO', 'CERTNO', 'SERIALNO', 'SRNO'
-            ]);
-            const university = getNormalizedField(normRow, [
-              'UNIVERSITY', 'UNIVERSITYNAME', 'BOARD', 'BOARDNAME', 'COUNCIL'
-            ]);
-            const institute = getNormalizedField(normRow, [
-              'INSTITUTENAME', 'INSTITUTE', 'COLLEGE', 'COLLEGENAME', 'SCHOOL', 'SCHOOLNAME'
-            ]);
-            const course = getNormalizedField(normRow, [
-              'COURSE', 'COURSENAME', 'QUALIFICATION', 'PROGRAMME', 'DEGREE', 'BRANCH'
-            ]);
+            const regNo = getNormalizedField(normRow, ['REGISTRATIONNUMBER', 'REGISTRATIONNO', 'REGNO', 'ENROLLMENTNO', 'ENROLLMENTNUMBER']);
+            const rollNo = getNormalizedField(normRow, ['ROLLNUMBER', 'ROLLNO', 'SEATNO', 'SEATNUMBER', 'ROLL']);
+            const certNo = getNormalizedField(normRow, ['CERTIFICATENUMBER', 'CERTIFICATENO', 'CERTNO', 'SERIALNO', 'SRNO']);
+            const university = getNormalizedField(normRow, ['UNIVERSITY', 'UNIVERSITYNAME', 'BOARD', 'BOARDNAME']);
+            const institute = getNormalizedField(normRow, ['INSTITUTENAME', 'INSTITUTE', 'COLLEGE', 'COLLEGENAME']);
+            const course = getNormalizedField(normRow, ['COURSE', 'COURSENAME', 'QUALIFICATION', 'PROGRAMME']);
 
             if (candName || fileName || regNo || rollNo || certNo) {
               const rawTokens = candName.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 1);
@@ -288,8 +253,8 @@
 
               candidatesList.push({
                 sheet: sheetName,
-                fileName: fileName || candName || rollNo || regNo || `Candidate_${candidatesList.length + 1}`,
-                candName: candName || fileName || rollNo || regNo,
+                fileName: fileName || candName || rollNo || `Candidate_${candidatesList.length + 1}`,
+                candName: candName || fileName || rollNo,
                 tokens: significantTokens,
                 rawTokens: rawTokens,
                 regNo: regNo,
@@ -304,7 +269,6 @@
                 cleanInstitute: cleanToken(institute),
                 course: course,
                 cleanCourse: cleanToken(course),
-                used: false,
                 raw: cleanRawRow
               });
             }
@@ -315,7 +279,6 @@
         checkReady();
       } catch (err) {
         alert("Failed to read Excel file: " + err.message);
-        document.getElementById('excelInfo').innerText = "Error reading Excel file";
       }
     });
 
@@ -418,13 +381,13 @@
       return hits / exp.length;
     }
 
+    // MULTI-DOC MATCHING: We allow the same candidate to match multiple files
     function findCandidateMatch(ocrText) {
       const eligible = [];
       const ocrWords = normWords(ocrText);
       const cleanOcr = cleanToken(ocrText);
 
       for (const cand of candidatesList) {
-        if (cand.used) continue;
         const nameCov = fieldCoverage(cand.candName, ocrText);
         const univCov = fieldCoverage(cand.university, ocrText);
         const instCov = fieldCoverage(cand.institute, ocrText);
@@ -478,6 +441,35 @@
       };
     }
 
+    // Renaming Re-indexer (Handles duplicate documents for candidate)
+    function recomputeAllAssignedNames() {
+      const counters = {};
+      let matches = 0;
+
+      processedResults.forEach((rec, idx) => {
+        if (rec.status === 'DONE' && rec.matchedCandidate) {
+          const base = String(rec.matchedCandidate.fileName || 'Candidate').replace(/[\\/:*?"<>|]/g, '_').trim();
+          const count = counters[base] || 0;
+          counters[base] = count + 1;
+
+          // Multi-document sequence format: Target, Target (01), Target (02)...
+          rec.assignedName = count === 0 ? `${base}${rec.ext}` : `${base} (${String(count).padStart(2, '0')})${rec.ext}`;
+          matches++;
+        } else {
+          rec.assignedName = rec.originalName;
+        }
+
+        const tr = document.getElementById(`row-${idx}`);
+        if (tr) {
+          tr.className = rec.status === 'DONE' ? 'hover:bg-slate-800/40 bg-emerald-950/10' : 'hover:bg-slate-800/40 bg-rose-950/10';
+          const nameCell = tr.querySelector('.assigned-name-cell');
+          if (nameCell) nameCell.innerText = rec.assignedName;
+        }
+      });
+
+      document.getElementById('statCounter').innerText = `${matches} / ${processedResults.length} matched`;
+    }
+
     // Execution Pipeline
     document.getElementById('startBtn').addEventListener('click', async () => {
       document.getElementById('startBtn').disabled = true;
@@ -486,7 +478,6 @@
       document.getElementById('downloadGroup').classList.add('hidden');
       document.getElementById('resultsTable').innerHTML = '';
       processedResults = [];
-      candidatesList.forEach(c => { c.used = false; });
 
       const cores = navigator.hardwareConcurrency || 4;
       const numWorkers = Math.max(1, Math.min(cores >= 8 ? 4 : cores >= 4 ? 3 : 2, imageFiles.length));
@@ -503,16 +494,16 @@
         let match = null;
         let finalOcrText = '';
 
-        // Pass 1: Standard 0-degree orientation
+        // Pass 1: 0°
         const blob0 = await prepareImageBlob(file, 0);
         try {
-          if (!blob0) throw new Error('Could not decode image');
+          if (!blob0) throw new Error('Could not decode');
           const res0 = await worker.recognize(blob0);
           finalOcrText = res0.data.text || '';
           match = findCandidateMatch(finalOcrText);
         } catch (e) {}
 
-        // Pass 2: Enhanced contrast retry
+        // Pass 2: Enhanced Contrast
         if (!match) {
           const enhancedBlob = await prepareImageBlob(file, 0, true);
           try {
@@ -520,7 +511,7 @@
               const enhancedRes = await worker.recognize(enhancedBlob);
               const enhancedText = enhancedRes.data.text || '';
               const enhancedMatch = findCandidateMatch(enhancedText);
-              finalOcrText += `\n[Enhanced OCR pass]\n` + enhancedText;
+              finalOcrText += `\n[Enhanced OCR]\n` + enhancedText;
               if (enhancedMatch) {
                 match = enhancedMatch;
                 match.reason += ' (enhanced OCR)';
@@ -529,10 +520,9 @@
           } catch (e) {}
         }
 
-        // Pass 3: Rotation passes (90°, 270°, 180°)
+        // Pass 3: Rotations (90°, 270°, 180°)
         if (!match) {
-          const rotationAngles = [90, 270, 180];
-          for (const angle of rotationAngles) {
+          for (const angle of [90, 270, 180]) {
             const rotBlob = await prepareImageBlob(file, angle);
             try {
               if (!rotBlob) continue;
@@ -548,24 +538,11 @@
           }
         }
 
-        let assignedName = '';
-        let status = 'NOT';
-
-        if (match && !match.cand.used) {
-          status = 'DONE';
-          matchedCount++;
-          match.cand.used = true;
-          assignedName = `${match.cand.fileName}${ext}`;
-        } else {
-          match = null;
-          assignedName = file.name;
-        }
-
         const record = {
           file: file,
           originalName: file.name,
-          assignedName: assignedName,
-          status: status,
+          assignedName: file.name,
+          status: match ? 'DONE' : 'NOT',
           matchedCandidate: match ? match.cand : null,
           matchReason: match ? match.reason : 'No matching record found',
           ocrText: finalOcrText,
@@ -574,13 +551,13 @@
 
         processedResults.push(record);
         renderRow(record, processedResults.length - 1);
+        recomputeAllAssignedNames();
 
         completedCount++;
         const pct = Math.round((completedCount / imageFiles.length) * 100);
         document.getElementById('progressBar').style.width = pct + '%';
         document.getElementById('progressPercent').innerText = pct + '%';
         document.getElementById('progressFile').innerText = `[${completedCount}/${imageFiles.length}] ${file.name}`;
-        document.getElementById('statCounter').innerText = `${matchedCount} / ${imageFiles.length} matched`;
       }
 
       let fileIndex = 0;
@@ -596,6 +573,7 @@
 
       for (const w of pool) await w.terminate();
 
+      recomputeAllAssignedNames();
       document.getElementById('liveStatus').innerText = 'Processing complete!';
       document.getElementById('downloadGroup').classList.remove('hidden');
       document.getElementById('startBtn').disabled = false;
@@ -610,7 +588,7 @@
         <td class="p-3"><img src="${URL.createObjectURL(record.file)}" class="w-10 h-10 object-cover rounded border border-slate-700 bg-black cursor-pointer" onclick="openInspector(${idx})" /></td>
         <td class="p-3 font-semibold text-slate-300">${record.originalName}</td>
         <td class="p-3 font-sans">${record.matchedCandidate ? record.matchedCandidate.candName : '<span class="text-slate-500 italic">No Match</span>'}</td>
-        <td class="p-3 font-semibold ${record.status === 'DONE' ? 'text-emerald-400' : 'text-slate-500'}">${record.assignedName}</td>
+        <td class="p-3 font-semibold assigned-name-cell ${record.status === 'DONE' ? 'text-emerald-400' : 'text-slate-500'}">${record.assignedName}</td>
         <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${record.status === 'DONE' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-rose-900/60 text-rose-300'}">${record.status}</span></td>
         <td class="p-3 text-slate-400 font-sans">${record.matchReason}</td>
         <td class="p-3 text-center">
@@ -620,7 +598,7 @@
       tbody.appendChild(tr);
     }
 
-    // Modal Inspector & Manual Override
+    // Modal Inspector & Manual Match Override
     window.openInspector = function (idx) {
       activeModalIndex = idx;
       modalRotation = 0;
@@ -682,36 +660,19 @@
 
       const chosenCandidate = candidatesList[chosenIdx];
       const rec = processedResults[activeModalIndex];
-      const collision = processedResults.some((other, i) => i !== activeModalIndex &&
-        other.status === 'DONE' && other.matchedCandidate === chosenCandidate);
-      if (collision) {
-        alert('This candidate is already assigned to another image. Review that image first to avoid duplicate filenames.');
-        return;
-      }
-      if (rec.matchedCandidate) rec.matchedCandidate.used = false;
-      chosenCandidate.used = true;
       rec.matchedCandidate = chosenCandidate;
       rec.status = 'DONE';
-      rec.assignedName = `${chosenCandidate.fileName || 'Renamed'}${rec.ext}`;
       rec.matchReason = 'Manual User Override';
 
       const tr = document.getElementById(`row-${activeModalIndex}`);
       if (tr) {
         tr.className = 'hover:bg-slate-800/40 bg-emerald-950/10';
-        tr.innerHTML = `
-          <td class="p-3"><img src="${URL.createObjectURL(rec.file)}" class="w-10 h-10 object-cover rounded border border-slate-700 bg-black cursor-pointer" onclick="openInspector(${activeModalIndex})" /></td>
-          <td class="p-3 font-semibold text-slate-300">${rec.originalName}</td>
-          <td class="p-3 font-sans">${chosenCandidate.candName} <span class="text-slate-500 font-mono">(${chosenCandidate.fileName})</span></td>
-          <td class="p-3 font-semibold text-emerald-400">${rec.assignedName}</td>
-          <td class="p-3">
-            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300">DONE</span>
-          </td>
-          <td class="p-3 text-slate-400 font-sans">Manual User Override</td>
-          <td class="p-3 text-center">
-            <button onclick="openInspector(${activeModalIndex})" class="text-blue-400 hover:text-blue-300 underline font-sans text-xs">Review / Fix</button>
-          </td>
-        `;
+        tr.children[2].innerHTML = `${chosenCandidate.candName} <span class="text-slate-500 font-mono">(${chosenCandidate.fileName})</span>`;
+        tr.children[4].innerHTML = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300">DONE</span>`;
+        tr.children[5].innerText = 'Manual User Override';
       }
+      
+      recomputeAllAssignedNames();
       closeModal();
     };
 
@@ -720,7 +681,6 @@
       document.getElementById('inspectorModal').classList.remove('flex');
     };
 
-    // Filter table
     document.getElementById('filterInput').addEventListener('input', (e) => {
       const q = e.target.value.toLowerCase();
       processedResults.forEach((rec, idx) => {
@@ -805,14 +765,6 @@
       for (const sheetName of sheetNames) {
         excelFolder.file(`${safeFilePart(sheetName)}_Processed.xlsx`, makeSheetWorkbook(sheetName));
       }
-
-      zip.file('README.txt', [
-        'Complete Package',
-        '',
-        'Each original Excel worksheet is exported as a separate workbook under Processed_Excel_By_Sheet/.',
-        'DONE means the matcher assigned a candidate. NOT means the file needs manual review.',
-        'OCR is not guaranteed to be 100% accurate; verify uncertain matches before using the filenames.'
-      ].join('\n'));
 
       const blob = await zip.generateAsync({ type: 'blob' }, meta => {
         document.getElementById('liveStatus').innerText = `Building ZIP... ${Math.round(meta.percent)}%`;
